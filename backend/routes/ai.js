@@ -10,9 +10,21 @@ const { GoogleGenAI } = require("@google/genai");
 const upload = multer({ dest: 'uploads/' });
 
 // Setup Gemini
-const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-});
+// Previously this constructed the client at module load time, which throws
+// synchronously if GEMINI_API_KEY is missing — that crashed the entire server
+// on startup (require('./routes/ai') in server.js), taking down every route,
+// not just the AI ones. Constructing it lazily on first use means a missing
+// key only fails the specific AI request that needed it.
+let aiClient = null;
+const getAiClient = () => {
+    if (!process.env.GEMINI_API_KEY) {
+        throw new Error('GEMINI_API_KEY is not configured — AI features are unavailable.');
+    }
+    if (!aiClient) {
+        aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    }
+    return aiClient;
+};
 
 // Helper to clean JSON
 const cleanJSON = (text) => {
@@ -48,7 +60,7 @@ router.post('/symptom-check', async (req, res) => {
         }
         `;
 
-        const response = await ai.models.generateContent({
+        const response = await getAiClient().models.generateContent({
             model: "gemini-2.5-flash",
             contents: { role: 'user', parts: [{ text: prompt }] },
         });
@@ -74,7 +86,7 @@ router.post('/symptom-check', async (req, res) => {
 router.post('/chat', async (req, res) => {
     try {
         const { message } = req.body;
-        const response = await ai.models.generateContent({
+        const response = await getAiClient().models.generateContent({
             model: "gemini-2.5-flash",
             contents: { role: 'user', parts: [{ text: message }] },
         });
@@ -136,7 +148,7 @@ router.post('/prescription', upload.single('file'), async (req, res) => {
         }
         `;
 
-        const geminiResponse = await ai.models.generateContent({
+        const geminiResponse = await getAiClient().models.generateContent({
             model: "gemini-2.5-flash",
             contents: [
                 {
@@ -179,7 +191,7 @@ router.post('/parse_reminder', async (req, res) => {
         If time is not specified, default to "09:00".
         `;
 
-        const response = await ai.models.generateContent({
+        const response = await getAiClient().models.generateContent({
             model: "gemini-2.5-flash",
             contents: { role: 'user', parts: [{ text: prompt }] },
         });
