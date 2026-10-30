@@ -15,6 +15,16 @@ const generateToken = (id) => {
 router.post('/register', async (req, res) => {
     const { name, email, password } = req.body;
 
+    // Validate before touching the DB. Previously a missing field fell through
+    // to User.create(), whose Mongoose ValidationError was caught by the
+    // generic handler below and reported as a 500 "Server Error" — telling the
+    // caller the server broke when in fact their request was incomplete.
+    if (!name || !email || !password) {
+        return res.status(400).json({
+            message: 'name, email and password are all required',
+        });
+    }
+
     try {
         const userExists = await User.findOne({ email });
 
@@ -28,18 +38,25 @@ router.post('/register', async (req, res) => {
             password,
         });
 
-        if (user) {
-            res.status(201).json({
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                token: generateToken(user._id),
-            });
-        } else {
-            res.status(400).json({ message: 'Invalid user data' });
-        }
+        return res.status(201).json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            token: generateToken(user._id),
+        });
     } catch (error) {
-        res.status(500).json({ message: 'Server Error' });
+        // A client-side validation problem is a 400, not a 500. The duplicate-key
+        // code (11000) covers the race where two registrations for the same email
+        // arrive between the findOne() above and the create().
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: error.message });
+        }
+        if (error.code === 11000) {
+            return res.status(400).json({ message: 'User already exists' });
+        }
+
+        console.error(`Register failed: ${error.message}`);
+        return res.status(500).json({ message: 'Server Error' });
     }
 });
 
